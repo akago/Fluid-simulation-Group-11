@@ -24,8 +24,8 @@
 
 /* external definitions (from solver.c) */
 
-extern void dens_step ( int N, float * x, float * x0, float * u, float * v, float diff, float dt );
-extern void vel_step ( int N, float * u, float * v, float * u0, float * v0, float visc, float dt );
+extern void dens_step ( int N, float * x, float * x0, float * u, float * v, bool * mask, float diff, float dt );
+extern void vel_step ( int N, float * u, float * v, float * u0, float * v0, bool * mask, float visc, float dt );
 
 /* global variables */
 
@@ -36,6 +36,7 @@ static int dvel;
 
 static float * u, * v, * u_prev, * v_prev;
 static float * dens, * dens_prev;
+static bool * internal_bd;
 
 static int win_id;
 static int win_x, win_y;
@@ -58,15 +59,32 @@ static void free_data ( void )
 	if ( v_prev ) free ( v_prev );
 	if ( dens ) free ( dens );
 	if ( dens_prev ) free ( dens_prev );
+	if ( internal_bd ) free ( internal_bd );
+}
+
+static void init_internal_bnd( void ){
+	int i, size=(N+2)*(N+2);
+
+	memset(internal_bd, false, size * sizeof(bool));
+	printf("============memset END==============");
+	for ( i=0; i<=N+1 ; i++ ) {
+		internal_bd[IX(0  ,i)] = true;
+		internal_bd[IX(N+1,i)] = true;
+		internal_bd[IX(i,0  )] = true;
+		internal_bd[IX(i,N+1)] = true;
+	}
+
+	printf("============init_internal_bnd END==============");
 }
 
 static void clear_data ( void )
 {
 	int i, size=(N+2)*(N+2);
-
+	
 	for ( i=0 ; i<size ; i++ ) {
 		u[i] = v[i] = u_prev[i] = v_prev[i] = dens[i] = dens_prev[i] = 0.0f;
 	}
+	init_internal_bnd();
 }
 
 static int allocate_data ( void )
@@ -79,11 +97,15 @@ static int allocate_data ( void )
 	v_prev		= (float *) malloc ( size*sizeof(float) );
 	dens		= (float *) malloc ( size*sizeof(float) );	
 	dens_prev	= (float *) malloc ( size*sizeof(float) );
+	internal_bd = (bool *) malloc ( size*sizeof(bool) );
+	
 
-	if ( !u || !v || !u_prev || !v_prev || !dens || !dens_prev ) {
+	if ( !u || !v || !u_prev || !v_prev || !dens || !dens_prev || !internal_bd ) {
 		fprintf ( stderr, "cannot allocate data\n" );
 		return ( 0 );
 	}
+	printf("===============allocate success=============");
+	init_internal_bnd();
 
 	return ( 1 );
 }
@@ -148,16 +170,25 @@ static void draw_density ( void )
 			x = (i-0.5f)*h;
 			for ( j=0 ; j<=N ; j++ ) {
 				y = (j-0.5f)*h;
+				if (!internal_bd[IX(i,j)]){
 
-				d00 = dens[IX(i,j)];
-				d01 = dens[IX(i,j+1)];
-				d10 = dens[IX(i+1,j)];
-				d11 = dens[IX(i+1,j+1)];
+					d00 = dens[IX(i,j)];
+					d01 = dens[IX(i,j+1)]; 
+					d10 = dens[IX(i+1,j)];
+					d11 = dens[IX(i+1,j+1)];
 
-				glColor3f ( d00, d00, d00 ); glVertex2f ( x, y );
-				glColor3f ( d10, d10, d10 ); glVertex2f ( x+h, y );
-				glColor3f ( d11, d11, d11 ); glVertex2f ( x+h, y+h );
-				glColor3f ( d01, d01, d01 ); glVertex2f ( x, y+h );
+					glColor3f ( d00, d00, d00 ); glVertex2f ( x, y );
+					glColor3f ( d10, d10, d10 ); glVertex2f ( x+h, y );
+					glColor3f ( d11, d11, d11 ); glVertex2f ( x+h, y+h );
+					glColor3f ( d01, d01, d01 ); glVertex2f ( x, y+h );
+				}
+				else{
+					 glColor3f(0.5f, 1.0f, 0.5f); 
+					 glVertex2f ( x, y );
+					 glVertex2f ( x+h, y );
+					 glVertex2f ( x+h, y+h );
+					 glVertex2f ( x, y+h );
+				}
 			}
 		}
 
@@ -170,7 +201,7 @@ static void draw_density ( void )
   ----------------------------------------------------------------------
 */
 
-static void get_from_UI ( float * d, float * u, float * v )
+static void get_from_UI ( float * d, float * u, float * v, bool* int_bnd_mask)
 {
 	int i, j, size = (N+2)*(N+2);
 
@@ -178,7 +209,7 @@ static void get_from_UI ( float * d, float * u, float * v )
 		u[i] = v[i] = d[i] = 0.0f;
 	}
 
-	if ( !mouse_down[0] && !mouse_down[2] ) return;
+	if ( !mouse_down[0] && !mouse_down[2] && !mouse_down[1] ) return;
 
 	i = (int)((       mx /(float)win_x)*N+1);
 	j = (int)(((win_y-my)/(float)win_y)*N+1);
@@ -188,6 +219,14 @@ static void get_from_UI ( float * d, float * u, float * v )
 	if ( mouse_down[0] ) {
 		u[IX(i,j)] = force * (mx-omx);
 		v[IX(i,j)] = force * (omy-my);
+	}
+
+	if ( mouse_down[1] ) {
+		int_bnd_mask[IX(i,j)] = true;
+		int_bnd_mask[IX(i+1,j)] = true;
+		int_bnd_mask[IX(i,j+1)] = true;
+		int_bnd_mask[IX(i+1,j+1)] = true;
+		printf("============intbnd setted========");
 	}
 
 	if ( mouse_down[2] ) {
@@ -233,6 +272,15 @@ static void mouse_func ( int button, int state, int x, int y )
 	omx = mx = x;
 	omx = my = y;
 
+	if (button == GLUT_MIDDLE_BUTTON){
+		printf("\n====middle down:====\n");
+	}
+	if (button == GLUT_RIGHT_BUTTON){
+		printf("\n====right down:====\n");
+	}
+	if (button == GLUT_LEFT_BUTTON){
+		printf("\n====left down:====\n");
+	}
 	mouse_down[button] = state == GLUT_DOWN;
 }
 
@@ -253,9 +301,9 @@ static void reshape_func ( int width, int height )
 
 static void idle_func ( void )
 {
-	get_from_UI ( dens_prev, u_prev, v_prev );
-	vel_step ( N, u, v, u_prev, v_prev, visc, dt );
-	dens_step ( N, dens, dens_prev, u, v, diff, dt );
+	get_from_UI ( dens_prev, u_prev, v_prev, internal_bd);
+	vel_step ( N, u, v, u_prev, v_prev, internal_bd, visc, dt );
+	dens_step ( N, dens, dens_prev, u, v, internal_bd, diff, dt );
 
 	glutSetWindow ( win_id );
 	glutPostRedisplay ();
@@ -326,7 +374,7 @@ int main ( int argc, char ** argv )
 	}
 
 	if ( argc == 1 ) {
-		N = 64;
+		N = 160;
 		dt = 0.1f;
 		diff = 0.0f;
 		visc = 0.0f;
@@ -345,6 +393,7 @@ int main ( int argc, char ** argv )
 
 	printf ( "\n\nHow to use this demo:\n\n" );
 	printf ( "\t Add densities with the right mouse button\n" );
+	printf ( "\t Add boundaries with the middle mouse button\n" );
 	printf ( "\t Add velocities with the left mouse button and dragging the mouse\n" );
 	printf ( "\t Toggle density/velocity display with the 'v' key\n" );
 	printf ( "\t Clear the simulation by pressing the 'c' key\n" );
