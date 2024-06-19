@@ -243,8 +243,8 @@ void set_bnd ( int N, int b, float * x, int* mask, float* bnd_vel)
 		}
 		
 	END_FOR
-	/*FOR_EACH_CELL
-		if (!mask[IX(i, j)]) {
+	FOR_EACH_CELL
+		if (mask[IX(i, j)] != 0) {
 			if (b == 0) {
 				set_intbnd(N, x, mask, i, j, b);
 			}
@@ -253,7 +253,7 @@ void set_bnd ( int N, int b, float * x, int* mask, float* bnd_vel)
 			}
 
 		}
-	END_FOR*/
+	END_FOR
 
 }
 
