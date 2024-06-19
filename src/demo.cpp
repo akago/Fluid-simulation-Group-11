@@ -13,30 +13,51 @@
 
   =======================================================================
 */
-
+#include <gfx/vec2.h>
+#include <vector>
 #include <stdlib.h>
 #include <stdio.h>
 #include <GL/glut.h>
+#include <iostream>
+#include <limits>
+
+#include "ParticleSystem.h"
+#include "SampleSystems.h"
+#include "Particle.h"
+#include "Force.h"
+#include "imageio.h"
+#include "Constraint.h"
+#include "LinearSolver.h"
+#include "RigidBody.h"
+
 
 /* macros */
 
 #define IX(i,j) ((i)+(N+2)*(j))
 
+
 /* external definitions (from solver.c) */
 
-extern void dens_step ( int N, float * x, float * x0, float * u, float * v, bool * mask, float diff, float dt );
-extern void vel_step ( int N, float * u, float * v, float * u0, float * v0, bool * mask, float visc, float dt );
+//extern void dens_step ( int N, float * x, float * x0, float * u, float * v, int * mask, float diff, float dt );
+//extern void vel_step ( int N, float * u, float * v, float * u0, float * v0, int * mask, float visc, float dt );
 
 /* global variables */
 
 static int N;
 static float dt, diff, visc;
 static float force, source;
-static int dvel;
+static int dvel, drb;
 
 static float * u, * v, * u_prev, * v_prev;
 static float * dens, * dens_prev;
-static bool * internal_bd;
+static int * internal_bd;
+static float* bnd_vel_u, * bnd_vel_v;
+
+static Particle *mouseParticle;
+static SpringForce *mouseSpringForce;
+static double mouse_kd;
+static double mouse_ks;
+static ParticleSystem* particleSystem;
 
 static int win_id;
 static int win_x, win_y;
@@ -60,21 +81,47 @@ static void free_data ( void )
 	if ( dens ) free ( dens );
 	if ( dens_prev ) free ( dens_prev );
 	if ( internal_bd ) free ( internal_bd );
+	if (bnd_vel_u) free(bnd_vel_u);
+	if (bnd_vel_v) free(bnd_vel_v);
+
+	delete particleSystem;
+	delete mouseParticle;
+	delete mouseSpringForce;
+	delete Constraint::GlobalJ;
+	delete Constraint::GlobalJdot;
 }
 
 static void init_internal_bnd( void ){
 	int i, size=(N+2)*(N+2);
 
-	memset(internal_bd, false, size * sizeof(bool));
-	printf("============memset END==============");
+	memset(internal_bd, 0, size * sizeof(int));
 	for ( i=0; i<=N+1 ; i++ ) {
-		internal_bd[IX(0  ,i)] = true;
-		internal_bd[IX(N+1,i)] = true;
-		internal_bd[IX(i,0  )] = true;
-		internal_bd[IX(i,N+1)] = true;
+		internal_bd[IX(0  ,i)] = 1;
+		internal_bd[IX(N+1,i)] = 1;
+		internal_bd[IX(i,0  )] = 1;
+		internal_bd[IX(i,N+1)] = 1;
 	}
+	
+}
 
-	printf("============init_internal_bnd END==============");
+static void init_particle_system(void)
+{
+	particleSystem = rigid1(dt);
+	mouse_kd = 0.1;
+	mouse_ks = 0.001;
+	particleSystem->reset();
+}
+
+static void reset_bndAndvel(void) {
+	int i, size = (N + 2)*(N + 2);
+
+	for (i = 0; i < size; i++) {
+		bnd_vel_u[i] = 0.0f;
+		bnd_vel_v[i] = 0.0f;
+		if (internal_bd[i] > 1) {
+			internal_bd[i] = 0;
+		}
+	}
 }
 
 static void clear_data ( void )
@@ -85,6 +132,7 @@ static void clear_data ( void )
 		u[i] = v[i] = u_prev[i] = v_prev[i] = dens[i] = dens_prev[i] = 0.0f;
 	}
 	init_internal_bnd();
+	particleSystem->reset();
 }
 
 static int allocate_data ( void )
@@ -97,15 +145,19 @@ static int allocate_data ( void )
 	v_prev		= (float *) malloc ( size*sizeof(float) );
 	dens		= (float *) malloc ( size*sizeof(float) );	
 	dens_prev	= (float *) malloc ( size*sizeof(float) );
-	internal_bd = (bool *) malloc ( size*sizeof(bool) );
-	
+	internal_bd = (int *) malloc ( size*sizeof(int) );
+	bnd_vel_u = (float *)malloc(size * sizeof(float));
+	bnd_vel_v = (float *)malloc(size * sizeof(float));
+	mouseParticle = new Particle(Vec2f(0, 0));
 
-	if ( !u || !v || !u_prev || !v_prev || !dens || !dens_prev || !internal_bd ) {
+	if ( !u || !v || !u_prev || !v_prev || !dens || !dens_prev || !internal_bd || !bnd_vel_u || !bnd_vel_v) {
 		fprintf ( stderr, "cannot allocate data\n" );
 		return ( 0 );
 	}
-	printf("===============allocate success=============");
+
 	init_internal_bnd();
+	init_particle_system();
+	reset_bndAndvel();
 
 	return ( 1 );
 }
@@ -170,7 +222,7 @@ static void draw_density ( void )
 			x = (i-0.5f)*h;
 			for ( j=0 ; j<=N ; j++ ) {
 				y = (j-0.5f)*h;
-				if (!internal_bd[IX(i,j)]){
+				if (internal_bd[IX(i,j)] == 0){
 
 					d00 = dens[IX(i,j)];
 					d01 = dens[IX(i,j+1)]; 
@@ -182,12 +234,19 @@ static void draw_density ( void )
 					glColor3f ( d11, d11, d11 ); glVertex2f ( x+h, y+h );
 					glColor3f ( d01, d01, d01 ); glVertex2f ( x, y+h );
 				}
-				else{
-					 glColor3f(0.5f, 1.0f, 0.5f); 
-					 glVertex2f ( x, y );
-					 glVertex2f ( x+h, y );
-					 glVertex2f ( x+h, y+h );
-					 glVertex2f ( x, y+h );
+				else if (internal_bd[IX(i, j)] == 2) {
+					glColor3f(1.0f, 0.0f, 0.0f);
+					glVertex2f(x, y);
+					glVertex2f(x + h, y);
+					glVertex2f(x + h, y + h);
+					glVertex2f(x, y + h);
+				}
+				else if (internal_bd[IX(i, j)] == 1) {
+					glColor3f(0.5f, 1.0f, 0.5f); 
+					glVertex2f ( x, y );
+					glVertex2f ( x+h, y );
+					glVertex2f ( x+h, y+h );
+					glVertex2f ( x, y+h );
 				}
 			}
 		}
@@ -197,11 +256,11 @@ static void draw_density ( void )
 
 /*
   ----------------------------------------------------------------------
-   relates mouse movements to forces sources
+   relates mouse movements to force sources
   ----------------------------------------------------------------------
 */
 
-static void get_from_UI ( float * d, float * u, float * v, bool* int_bnd_mask)
+static void get_from_UI ( float * d, float * u, float * v, int* int_bnd_mask)
 {
 	int i, j, size = (N+2)*(N+2);
 
@@ -216,17 +275,16 @@ static void get_from_UI ( float * d, float * u, float * v, bool* int_bnd_mask)
 
 	if ( i<1 || i>N || j<1 || j>N ) return;
 
-	if ( mouse_down[0] ) {
+	if ( mouse_down[0] && !drb ) {
 		u[IX(i,j)] = force * (mx-omx);
 		v[IX(i,j)] = force * (omy-my);
 	}
 
 	if ( mouse_down[1] ) {
-		int_bnd_mask[IX(i,j)] = true;
-		int_bnd_mask[IX(i+1,j)] = true;
-		int_bnd_mask[IX(i,j+1)] = true;
-		int_bnd_mask[IX(i+1,j+1)] = true;
-		printf("============intbnd setted========");
+		int_bnd_mask[IX(i,j)] = 1;
+		int_bnd_mask[IX(i+1,j)] = 1;
+		int_bnd_mask[IX(i,j+1)] = 1;
+		int_bnd_mask[IX(i+1,j+1)] = 1;
 	}
 
 	if ( mouse_down[2] ) {
@@ -264,6 +322,10 @@ static void key_func ( unsigned char key, int x, int y )
 		case 'V':
 			dvel = !dvel;
 			break;
+		case 'x':
+		case 'X':
+			drb = !drb;
+			break;
 	}
 }
 
@@ -272,15 +334,6 @@ static void mouse_func ( int button, int state, int x, int y )
 	omx = mx = x;
 	omx = my = y;
 
-	if (button == GLUT_MIDDLE_BUTTON){
-		printf("\n====middle down:====\n");
-	}
-	if (button == GLUT_RIGHT_BUTTON){
-		printf("\n====right down:====\n");
-	}
-	if (button == GLUT_LEFT_BUTTON){
-		printf("\n====left down:====\n");
-	}
 	mouse_down[button] = state == GLUT_DOWN;
 }
 
@@ -299,11 +352,75 @@ static void reshape_func ( int width, int height )
 	win_y = height;
 }
 
+bool isbdvelallzero() {
+	int size = (N + 2)*(N + 2);
+	for (int i = 0; i < size; i++) {
+		if (bnd_vel_u[i] != 0.0 || bnd_vel_v[i] != 0.0) {
+			return false;
+		}
+	}
+	return true;
+}
+bool isvelallzero() {
+	int size = (N + 2)*(N + 2);
+	for (int i = 0; i < size; i++) {
+		printf("%d,%d\n", u[i], v[i]);
+		if (u[i] != 0.0 || v[i] != 0.0) {
+			return false;
+		}
+	}
+	return true;
+}
+
 static void idle_func ( void )
 {
+	
 	get_from_UI ( dens_prev, u_prev, v_prev, internal_bd);
-	vel_step ( N, u, v, u_prev, v_prev, internal_bd, visc, dt );
-	dens_step ( N, dens, dens_prev, u, v, internal_bd, diff, dt );
+	reset_bndAndvel();
+	if (mouse_down[0] && drb) {
+		mouseParticle->m_Position[0] = (2.0*mx / win_x) - 1;
+		mouseParticle->m_Position[1] = -(2.0*my / win_y) + 1;
+
+		Particle *closestParticle;
+		float closestDistanceSquared = std::numeric_limits<float>::max();
+
+		for (auto p : particleSystem->getParticles()) {
+			float dx = (mouseParticle->m_Position[0] - p->m_Position[0]);
+			float dy = (mouseParticle->m_Position[1] - p->m_Position[1]);
+			float distanceSquared = dx * dx + dy * dy;
+			if (distanceSquared < closestDistanceSquared) {
+				closestParticle = p;
+				closestDistanceSquared = distanceSquared;
+			}
+		}
+		// Also consider rb vertices
+		for (auto rb : particleSystem->getRigids()) {
+			for (auto p : rb->m_Vertices) {
+				float dx = (mouseParticle->m_Position[0] - (p->m_Position[0] + rb->m_Position[0]));
+				float dy = (mouseParticle->m_Position[1] - (p->m_Position[1] + rb->m_Position[1]));
+				float distanceSquared = dx * dx + dy * dy;
+				if (distanceSquared < closestDistanceSquared) {
+					closestParticle = p;
+					closestDistanceSquared = distanceSquared;
+				}
+			}
+		}
+
+		mouseSpringForce = new SpringForce(mouseParticle, closestParticle, 0, mouse_kd, mouse_ks);
+		
+		particleSystem->addForce(mouseSpringForce);
+		particleSystem->simulationStep();
+		particleSystem->removeLastForce();
+		delete mouseSpringForce;
+	}
+	else {
+		particleSystem->simulationStep();
+	}
+	
+	particleSystem->projectRigidBodies(N, internal_bd, bnd_vel_u, bnd_vel_v);
+	
+	vel_step ( N, u, v, u_prev, v_prev, internal_bd, bnd_vel_u, bnd_vel_v, visc, dt );
+	dens_step ( N, dens, dens_prev, u, v, internal_bd, bnd_vel_u, bnd_vel_v, diff, dt );
 
 	glutSetWindow ( win_id );
 	glutPostRedisplay ();
@@ -315,6 +432,12 @@ static void display_func ( void )
 
 		if ( dvel ) draw_velocity ();
 		else		draw_density ();
+
+		particleSystem->drawWalls();
+		particleSystem->drawConstraints();
+		particleSystem->drawForces();
+		particleSystem->drawParticles();
+		particleSystem->drawRigids();
 
 	post_display ();
 }
@@ -394,12 +517,13 @@ int main ( int argc, char ** argv )
 	printf ( "\n\nHow to use this demo:\n\n" );
 	printf ( "\t Add densities with the right mouse button\n" );
 	printf ( "\t Add boundaries with the middle mouse button\n" );
-	printf ( "\t Add velocities with the left mouse button and dragging the mouse\n" );
+	printf("\t Use the 'x' key to switch between using the left mouse button to control the rigid body or add velocity. ");
 	printf ( "\t Toggle density/velocity display with the 'v' key\n" );
 	printf ( "\t Clear the simulation by pressing the 'c' key\n" );
 	printf ( "\t Quit by pressing the 'q' key\n" );
 
 	dvel = 0;
+	drb = 0;
 
 	if ( !allocate_data () ) exit ( 1 );
 	clear_data ();
