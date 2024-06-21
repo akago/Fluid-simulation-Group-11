@@ -36,6 +36,7 @@ class ParticleSystem {
 		std::vector<RigidBody*>& getRigids();
 
         int particleCount();
+        int objectCount();
         
         void drawParticles();
         void drawForces();

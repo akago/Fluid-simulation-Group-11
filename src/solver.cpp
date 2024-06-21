@@ -53,66 +53,71 @@ void ParticleDeriv(std::vector<Particle*> pVector, std::vector<RigidBody*> rigid
 		*(dst++) = p->m_Force[1] / p->mass;
 	}
 
-	/* rigid body simulation*/
-	for (int i = 0; i < rigid_bodies.size(); i++) {
-		rigid_bodies[i]->m_Velocity += (rigid_bodies[i]->m_Force / rigid_bodies[i]->Mass) * dt;
-		rigid_bodies[i]->m_Angular_Vec += (rigid_bodies[i]->m_torque / rigid_bodies[i]->m_Inertia) * dt;
-		rigid_bodies[i]->m_Position += rigid_bodies[i]->m_Velocity * dt;
-		rigid_bodies[i]->m_Angle += rigid_bodies[i]->m_Angular_Vec * dt;
-
-		rigid_bodies[i]->updateR(rigid_bodies[i]->m_Angle);
-
-		rigid_bodies[i]->m_Angular_Vec *= 0.99f;
-
-		/* Update vertices local position*/
-		for (int j = 0; j < rigid_bodies[i]->m_Vertices.size(); j++)
-		{
-			rigid_bodies[i]->m_Vertices[j]->m_Position = rigid_bodies[i]->m_R.multiByVec2(rigid_bodies[i]->m_Vertices[j]->m_Position);
-		}
-
-		
+	for (auto r : rigid_bodies) {
+		*(dst++) = r->m_LinearMomentum[0] / r->Mass;
+		*(dst++) = r->m_LinearMomentum[1] / r->Mass;
+		*(dst++) = r->m_AngularMomentum / r->m_Inertia;
+		*(dst++) = r->m_Force[0];
+		*(dst++) = r->m_Force[1];
+		*(dst++) = r->m_torque;
 	}
-
 }
 
-void GetSystemState(std::vector<Particle*> pVector, double* dst) {
+void GetSystemState(std::vector<Particle*> pVector, std::vector<RigidBody*> rigid_bodies, double* dst) {
 	for (auto p : pVector) {
 		*(dst++) = p->m_Position[0];
 		*(dst++) = p->m_Position[1];
 		*(dst++) = p->m_Velocity[0];
 		*(dst++) = p->m_Velocity[1];
 	}
+	for (auto r : rigid_bodies) {
+		*(dst++) = r->m_Position[0];
+		*(dst++) = r->m_Position[1];
+		*(dst++) = r->m_Angle;
+		*(dst++) = r->m_LinearMomentum[0];
+		*(dst++) = r->m_LinearMomentum[1];
+		*(dst++) = r->m_AngularMomentum;
+	}
 }
 
-void SetSystemState(std::vector<Particle*> pVector, double* src) {
+void SetSystemState(std::vector<Particle*> pVector, std::vector<RigidBody*> rigid_bodies, double* src) {
 	for (auto p : pVector) {
 		p->m_Position[0] = *(src++);
 		p->m_Position[1] = *(src++);
 		p->m_Velocity[0] = *(src++);
 		p->m_Velocity[1] = *(src++);
 	}
+	for (auto r : rigid_bodies) {
+		r->m_Position[0] = *(src++);
+		r->m_Position[1] = *(src++);
+		r->m_Angle = *(src++);
+		r->m_LinearMomentum[0] = *(src++);
+		r->m_LinearMomentum[1] = *(src++);
+		r->m_AngularMomentum = *(src++);
+	}
 }
 
 double* ComputeK1(std::vector<Particle*> pVector, std::vector<RigidBody*> rigid_bodies, std::vector<Force*> fVector, std::vector<Constraint*> cVector, double dt) {
-	double* k1 = (double*)malloc(pVector.size() * 4 * sizeof(double));
+	double* k1 = (double*)malloc(pVector.size() * 4 * sizeof(double) + rigid_bodies.size() * 6 * sizeof(double));
 
 	// Compute k1
 	ParticleDeriv(pVector, rigid_bodies, fVector, cVector, k1, dt);
-	vecTimesScalar(pVector.size() * 4, k1, dt);
+
+	vecTimesScalar(pVector.size() * 4 + rigid_bodies.size() * 6, k1, dt);
 
 	return k1;
 }
 
 double* ComputeKHelper(std::vector<Particle*> pVector, std::vector<RigidBody*> rigid_bodies, std::vector<Force*> fVector, std::vector<Constraint*> cVector, double dt, double* k, double factor) {
-	double* k_next = (double*)malloc(pVector.size() * 4 * sizeof(double));
+	double* k_next = (double*)malloc(pVector.size() * 4 * sizeof(double) + rigid_bodies.size() * 6 * sizeof(double));
 
 	// Compute next k
-	GetSystemState(pVector, k_next);
-	vecAddEqualWithFactor(pVector.size() * 4, k_next, k, factor);
+	GetSystemState(pVector, rigid_bodies, k_next);
+	vecAddEqualWithFactor(pVector.size() * 4 + rigid_bodies.size() * 6, k_next, k, factor);
 
-	SetSystemState(pVector, k_next);
+	SetSystemState(pVector, rigid_bodies, k_next);
 	ParticleDeriv(pVector, rigid_bodies, fVector, cVector, k_next, dt);
-	vecTimesScalar(pVector.size() * 4, k_next, dt);
+	vecTimesScalar(pVector.size() * 4 + rigid_bodies.size() * 6, k_next, dt);
 
 	return k_next;
 
@@ -131,26 +136,26 @@ double* ComputeK4(std::vector<Particle*> pVector, std::vector<RigidBody*> rigid_
 }
 
 void Euler_step(std::vector<Particle*> pVector, std::vector<RigidBody*> rigid_bodies, std::vector<Force*> fVector, std::vector<Constraint*> cVector, float dt) {
-	double* state = (double*)malloc(pVector.size() * 4 * sizeof(double));
-	GetSystemState(pVector, state);
+	double* state = (double*)malloc(pVector.size() * 4 * sizeof(double) + rigid_bodies.size() * 6 * sizeof(double));
+	GetSystemState(pVector, rigid_bodies, state);
 
 	double* k1 = ComputeK1(pVector, rigid_bodies, fVector, cVector, dt);
-	vecAddEqual(pVector.size() * 4, state, k1);
-	SetSystemState(pVector, state);
+	vecAddEqual(pVector.size() * 4 + rigid_bodies.size() * 6, state, k1);
+	SetSystemState(pVector, rigid_bodies, state);
 
 	free(state);
 	free(k1);
 }
 
 void Midpoint_step(std::vector<Particle*> pVector, std::vector<RigidBody*> rigid_bodies, std::vector<Force*> fVector, std::vector<Constraint*> cVector, float dt) {
-	double* state = (double*)malloc(pVector.size() * 4 * sizeof(double));
-	GetSystemState(pVector, state);
+	double* state = (double*)malloc(pVector.size() * 4 * sizeof(double) + rigid_bodies.size() * 6 * sizeof(double));
+	GetSystemState(pVector, rigid_bodies, state);
 
 	double* k1 = ComputeK1(pVector, rigid_bodies, fVector, cVector, dt);
 	double* k2 = ComputeK2(pVector, rigid_bodies, fVector, cVector, dt, k1);
 
-	vecAddEqual(pVector.size() * 4, state, k2);
-	SetSystemState(pVector, state);
+	vecAddEqual(pVector.size() * 4 + rigid_bodies.size() * 6, state, k2);
+	SetSystemState(pVector, rigid_bodies, state);
 
 	free(state);
 	free(k1);
@@ -158,21 +163,21 @@ void Midpoint_step(std::vector<Particle*> pVector, std::vector<RigidBody*> rigid
 }
 
 void Runge_Kutta_4(std::vector<Particle*> pVector, std::vector<RigidBody*> rigid_bodies, std::vector<Force*> fVector, std::vector<Constraint*> cVector, float dt) {
-	double* state = (double*)malloc(pVector.size() * 4 * sizeof(double));
-	GetSystemState(pVector, state);
+	double* state = (double*)malloc(pVector.size() * 4 * sizeof(double) + rigid_bodies.size() * 6 * sizeof(double));
+	GetSystemState(pVector, rigid_bodies, state);
 
 	double* k1 = ComputeK1(pVector, rigid_bodies, fVector, cVector, dt);
 	double* k2 = ComputeK2(pVector, rigid_bodies, fVector, cVector, dt, k1);
-	SetSystemState(pVector, state);
+	SetSystemState(pVector, rigid_bodies, state);
 	double* k3 = ComputeK3(pVector, rigid_bodies, fVector, cVector, dt, k2);
-	SetSystemState(pVector, state);
+	SetSystemState(pVector, rigid_bodies, state);
 	double* k4 = ComputeK4(pVector, rigid_bodies, fVector, cVector, dt, k3);
 
-	vecAddEqualWithFactor(pVector.size() * 4, state, k1, 1.0 / 6);
-	vecAddEqualWithFactor(pVector.size() * 4, state, k2, 1.0 / 3);
-	vecAddEqualWithFactor(pVector.size() * 4, state, k3, 1.0 / 3);
-	vecAddEqualWithFactor(pVector.size() * 4, state, k4, 1.0 / 6);
-	SetSystemState(pVector, state);
+	vecAddEqualWithFactor(pVector.size() * 4 + rigid_bodies.size() * 6, state, k1, 1.0 / 6);
+	vecAddEqualWithFactor(pVector.size() * 4 + rigid_bodies.size() * 6, state, k2, 1.0 / 3);
+	vecAddEqualWithFactor(pVector.size() * 4 + rigid_bodies.size() * 6, state, k3, 1.0 / 3);
+	vecAddEqualWithFactor(pVector.size() * 4 + rigid_bodies.size() * 6, state, k4, 1.0 / 6);
+	SetSystemState(pVector, rigid_bodies, state);
 
 	free(state);
 	free(k1);
@@ -194,26 +199,28 @@ void add_source ( int N, float * x, float * s, float dt )
 }
 
 
-void set_intbnd(int N, float * x, int* mask, int i, int j, int b){
-	if (!mask[IX(i+1, j)]) x[IX(i,j)] = b==1 ? -x[IX(i+1, j)] : x[IX(i+1, j)];
-	else if (!mask[IX(i-1, j)]) x[IX(i,j)] = b==1 ? -x[IX(i-1, j)] : x[IX(i-1, j)];
-	else if (!mask[IX(i, j+1)]) x[IX(i,j)] = b==2 ? -x[IX(i, j+1)] : x[IX(i, j+1)];
-	else if (!mask[IX(i, j-1)]) x[IX(i,j)] = b==2 ? -x[IX(i, j-1)] : x[IX(i, j-1)];
-	else if (!mask[IX(i-1, j-1)]) x[IX(i,j)] = 0.5f*(x[IX(i-1,j)]+x[IX(i,j-1)]);
-	else if (!mask[IX(i+1, j-1)]) x[IX(i,j)] = 0.5f*(x[IX(i+1,j)]+x[IX(i,j-1)]);
-	else if (!mask[IX(i-1, j+1)]) x[IX(i,j)] = 0.5f*(x[IX(i-1,j)]+x[IX(i,j+1)]);
-	else if (!mask[IX(i+1, j+1)]) x[IX(i,j)] = 0.5f*(x[IX(i+1,j)]+x[IX(i,j+1)]);
+void set_intbnd(int N, float * x, int* mask, int i, int j){
+	float total = 0;
+	int count = 0;
+	if 		(!mask[IX(i+1, j)])   {total += x[IX(i+1, j)]; count++;}
+	else if (!mask[IX(i-1, j)])   {total += x[IX(i-1, j)]; count++;}
+	else if (!mask[IX(i, j+1)])   {total += x[IX(i, j+1)]; count++;}
+	else if (!mask[IX(i, j-1)])   {total += x[IX(i, j-1)]; count++;}
+
+	if(count != 0)
+		x[IX(i,j)] = total/count;
 }
 
-void set_bnd_vel(int N, float * x, int* mask, float* bnd_vel, int i, int j, int b) {
-	if (!mask[IX(i + 1, j)]) x[IX(i, j)] = b == 1 ? bnd_vel[IX(i, j)]-x[IX(i + 1, j)] : x[IX(i + 1, j)];
-	else if (!mask[IX(i - 1, j)]) x[IX(i, j)] = b == 1 ? bnd_vel[IX(i, j)] -x[IX(i - 1, j)] : x[IX(i - 1, j)];
-	else if (!mask[IX(i, j + 1)]) x[IX(i, j)] = b == 2 ? bnd_vel[IX(i, j)] -x[IX(i, j + 1)] : x[IX(i, j + 1)];
-	else if (!mask[IX(i, j - 1)]) x[IX(i, j)] = b == 2 ? bnd_vel[IX(i, j)] -x[IX(i, j - 1)] : x[IX(i, j - 1)];
-	else if (!mask[IX(i - 1, j - 1)]) x[IX(i, j)] = 0.5f*(x[IX(i - 1, j)] + x[IX(i, j - 1)]);
-	else if (!mask[IX(i + 1, j - 1)]) x[IX(i, j)] = 0.5f*(x[IX(i + 1, j)] + x[IX(i, j - 1)]);
-	else if (!mask[IX(i - 1, j + 1)]) x[IX(i, j)] = 0.5f*(x[IX(i - 1, j)] + x[IX(i, j + 1)]);
-	else if (!mask[IX(i + 1, j + 1)]) x[IX(i, j)] = 0.5f*(x[IX(i + 1, j)] + x[IX(i, j + 1)]);
+void set_bnd_vel(int N, float * x, int* mask, int i, int j, int b) {
+	float total = 0;
+	int count = 0;
+	if 		(!mask[IX(i + 1, j)]) 		{total += b == 1 ? -x[IX(i + 1, j)] : x[IX(i + 1, j)]; count++;}
+	else if (!mask[IX(i - 1, j)]) 		{total += b == 1 ? -x[IX(i - 1, j)] : x[IX(i - 1, j)]; count++;}
+	else if (!mask[IX(i, j + 1)]) 		{total += b == 2 ? -x[IX(i, j + 1)] : x[IX(i, j + 1)]; count++;}
+	else if (!mask[IX(i, j - 1)]) 		{total += b == 2 ? -x[IX(i, j - 1)] : x[IX(i, j - 1)]; count++;}
+
+	if(count != 0)
+		x[IX(i,j)] = total/count;
 }
 
 void set_bnd ( int N, int b, float * x, int* mask, float* bnd_vel)
@@ -233,28 +240,17 @@ void set_bnd ( int N, int b, float * x, int* mask, float* bnd_vel)
 
 	/* internal boundary*/
 	FOR_EACH_CELL
-		if (mask[IX(i, j)] != 0){
-			if (b == 0) {
-				set_intbnd(N, x, mask, i, j, b);
-			}
-			else {
-				set_bnd_vel(N, x, mask, bnd_vel, i, j, b);
-			}
+		if (mask[IX(i, j)] != 0 && b == 0) {
+			set_intbnd(N, x, mask, i, j);
+		} 
+		else if (mask[IX(i, j)] == 1) {
+			set_bnd_vel(N, x, mask, i, j, b);
 		}
-		
-	END_FOR
-	FOR_EACH_CELL
-		if (mask[IX(i, j)] != 0) {
-			if (b == 0) {
-				set_intbnd(N, x, mask, i, j, b);
-			}
-			else {
-				set_bnd_vel(N, x, mask, bnd_vel, i, j, b);
-			}
-
+		else if (mask[IX(i, j)] == 2) {
+			x[IX(i, j)] = bnd_vel[IX(i, j)];
 		}
-	END_FOR
 
+	END_FOR
 }
 
 void lin_solve ( int N, int b, float * x, float * x0, int* mask, float* bnd_vel, float a, float c )
@@ -263,6 +259,7 @@ void lin_solve ( int N, int b, float * x, float * x0, int* mask, float* bnd_vel,
 
 	for ( k=0 ; k<20 ; k++ ) {
 		FOR_EACH_CELL
+			if(mask[IX(i,j)]) continue;
 			x[IX(i,j)] = (x0[IX(i,j)] + a*(x[IX(i-1,j)]+x[IX(i+1,j)]+x[IX(i,j-1)]+x[IX(i,j+1)]))/c;
 		END_FOR
 		set_bnd ( N, b, x, mask, bnd_vel);
@@ -282,9 +279,11 @@ void advect ( int N, int b, float * d, float * d0, float * u, float * v, int* ma
 
 	dt0 = dt*N;
 	FOR_EACH_CELL
+		if(mask[IX(i,j)]) continue;
 		x = i-dt0*u[IX(i,j)]; y = j-dt0*v[IX(i,j)];
 		if (x<0.5f) x=0.5f; if (x>N+0.5f) x=N+0.5f; i0=(int)x; i1=i0+1;
 		if (y<0.5f) y=0.5f; if (y>N+0.5f) y=N+0.5f; j0=(int)y; j1=j0+1;
+
 		s1 = x-i0; s0 = 1-s1; t1 = y-j0; t0 = 1-t1;
 		d[IX(i,j)] = s0*(t0*d0[IX(i0,j0)]+t1*d0[IX(i0,j1)])+
 					 s1*(t0*d0[IX(i1,j0)]+t1*d0[IX(i1,j1)]);
@@ -305,6 +304,7 @@ void project ( int N, float * u, float * v, float * p, float * div, int* mask, f
 	lin_solve ( N, 0, p, div, mask, bnd_vel_u, 1, 4 );
 
 	FOR_EACH_CELL
+		if(mask[IX(i,j)]) continue;
 		u[IX(i,j)] -= 0.5f*N*(p[IX(i+1,j)]-p[IX(i-1,j)]);
 		v[IX(i,j)] -= 0.5f*N*(p[IX(i,j+1)]-p[IX(i,j-1)]);
 	END_FOR
@@ -313,10 +313,10 @@ void project ( int N, float * u, float * v, float * p, float * div, int* mask, f
 
 
 
-void vorticity_confinement(int N, float * u, float * v, float * u0, float * v0, float epsilon){
+void vorticity_confinement(int N, float * u, float * v, float * u0, float * v0, float epsilon, int * mask){
 	int i, j, k;
 	float* omega, *eta_x, *eta_y;
-	int size = (N+2)*(N+2);
+	int size = (N+2)*(N+2); 
 	
 	omega = (float *) malloc ( size*sizeof(float) );
 	eta_x = (float *) malloc ( size*sizeof(float) );
@@ -336,6 +336,7 @@ void vorticity_confinement(int N, float * u, float * v, float * u0, float * v0, 
 
 	// N = eta / |eta|
 	FOR_EACH_CELL
+			if(mask[IX(i,j)]) continue;
 			float magnitude = sqrt(eta_x[IX(i,j)] * eta_x[IX(i,j)] + eta_y[IX(i,j)] * eta_y[IX(i,j)]);
 			if (magnitude > 0) {
                 eta_x[IX(i,j)] /= magnitude;
@@ -355,6 +356,7 @@ void vorticity_confinement(int N, float * u, float * v, float * u0, float * v0, 
 
 void dens_step ( int N, float * x, float * x0, float * u, float * v, int * mask, float* bnd_vel_u,  float* bnd_vel_v, float diff, float dt )
 {
+	set_bnd(N, 0, x, mask, bnd_vel_u);
 	add_source ( N, x, x0, dt );
 	SWAP ( x0, x ); diffuse ( N, 0, x, x0, mask, bnd_vel_u, diff, dt );
 	SWAP ( x0, x ); advect ( N, 0, x, x0, u, v, mask, bnd_vel_u, dt );
@@ -362,7 +364,10 @@ void dens_step ( int N, float * x, float * x0, float * u, float * v, int * mask,
 
 void vel_step ( int N, float * u, float * v, float * u0, float * v0, int * mask, float* bnd_vel_u,  float* bnd_vel_v, float visc, float dt )
 {	
-	vorticity_confinement(N, u, v, u0, v0, 0.1);
+	set_bnd(N, 1, u, mask, bnd_vel_u);
+	set_bnd(N, 2, v, mask, bnd_vel_v);
+
+	vorticity_confinement(N, u, v, u0, v0, 0.1, mask);
 	add_source ( N, u, u0, dt ); add_source ( N, v, v0, dt );
 	SWAP ( u0, u ); diffuse ( N, 1, u, u0, mask, bnd_vel_u, visc, dt );
 	SWAP ( v0, v ); diffuse ( N, 2, v, v0, mask, bnd_vel_v, visc, dt );

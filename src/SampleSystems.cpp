@@ -259,6 +259,7 @@ ParticleSystem* rigid1(float dt) {
 
 
 	system->addRigid(new myRectangle(0.9,0.1,0.05,Vec2f(0.5,0.5)));
+
 	// Create Global Constraint Jacobian Matrix
 	Constraint::GlobalJ = new GlobalMatrix(0, system->particleCount() * 2);
 	Constraint::GlobalJdot = new GlobalMatrix(0, system->particleCount() * 2);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <gfx/vec2.h>
+#include <gfx/mat2.h>
 #include "Matrix.h"
 #include "Particle.h"
 #include <vector>
@@ -16,7 +17,6 @@ public:
 	void draw();
 	void clearForce();
 	std::vector<float> getBBox();
-	void updateR(float angle);
 	void projectToGrid(int N, int* internal_bd, float* bnd_vel_u, float* bnd_vel_v);
 	bool verticesInCell(const Vec2f& cell_center, const float h);
 	bool pointInPolygon(const Vec2f& point, const float h);
@@ -24,6 +24,7 @@ public:
 	void addForce();
 	void addTorque();
 	void reset();
+	void updateVectors();
 
 	/* Vertices of the rigid*/
 	std::vector<Particle*> m_Vertices;
@@ -35,15 +36,13 @@ public:
 
 	/* State variables */
 	Vec2f m_Position;	 /* x(t) */
-	matrix m_R;			/* R(t) */	
-	Vec2f m_Velocity; /* v(t) */
-	float m_Angular_Vec; /* ω(t) */
+	float m_Angle; // the angle that a rigidbody has been rotated since last timestep
+	Vec2f m_LinearMomentum; /* P(t) */
+	float m_AngularMomentum; /* L(t) */
 
 	/* Computed quantities */
 	Vec2f m_Force; //(right, up), same as opengl coordinate
 	float m_torque;
-	float m_Angle; // the angle that a rigidbody has been rotated since last timestep
-
 };
 
 

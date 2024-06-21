@@ -35,20 +35,20 @@ double MouseForce::applyForce()
 	}
 	else if (rightMouseDown)
 	{
-		for (int i = 0; i < m_rigid_bodies.size(); i++)
-		{
-			Vec2f dist = m_rigid_bodies[i]->m_Position - m_mousePos;
-			Vec2f vecDif = m_rigid_bodies[i]->m_Velocity;
+		// for (int i = 0; i < m_rigid_bodies.size(); i++)
+		// {
+		// 	Vec2f dist = m_rigid_bodies[i]->m_Position - m_mousePos;
+		// 	Vec2f vecDif = m_rigid_bodies[i]->m_Velocity;
 																				
-			float distance = sqrt(dist[0] * dist[0] + dist[1] * dist[1]);
-			float dotProduct = dist * vecDif;
+		// 	float distance = sqrt(dist[0] * dist[0] + dist[1] * dist[1]);
+		// 	float dotProduct = dist * vecDif;
 
-			float scalar = (m_ks * (distance - m_dist) + m_kd * (dotProduct / distance));
+		// 	float scalar = (m_ks * (distance - m_dist) + m_kd * (dotProduct / distance));
 
-			Vec2f result = scalar * (dist / distance);
+		// 	Vec2f result = scalar * (dist / distance);
 
-			m_rigid_bodies[i]->m_Force -= result;
-		}
+		// 	m_rigid_bodies[i]->m_Force -= result;
+		// }
 	}
 	return 0;
 }

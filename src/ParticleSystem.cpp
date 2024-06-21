@@ -102,6 +102,10 @@ int ParticleSystem::particleCount() {
     return particles.size();
 }
 
+int ParticleSystem::objectCount() {
+	return particles.size() + rigid_bodies.size();
+}
+
 void ParticleSystem::drawParticles ( )
 {
     for (auto particle : particles) {

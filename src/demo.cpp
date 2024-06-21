@@ -54,6 +54,7 @@ static int * internal_bd;
 static float* bnd_vel_u, * bnd_vel_v;
 
 static Particle *mouseParticle;
+static Particle *closestParticle;
 static SpringForce *mouseSpringForce;
 static double mouse_kd;
 static double mouse_ks;
@@ -64,6 +65,7 @@ static int win_x, win_y;
 static int mouse_down[3];
 static int omx, omy, mx, my;
 
+bool mouse_down_prev = false;
 
 /*
   ----------------------------------------------------------------------
@@ -110,6 +112,9 @@ static void init_particle_system(void)
 	mouse_kd = 0.1;
 	mouse_ks = 0.001;
 	particleSystem->reset();
+
+	mouseParticle->m_Position[0] = 0;
+	mouseParticle->m_Position[1] = 0;
 }
 
 static void reset_bndAndvel(void) {
@@ -260,9 +265,22 @@ static void draw_density ( void )
   ----------------------------------------------------------------------
 */
 
+void set_boundary(int* int_bnd_mask, int i, int j) 
+{
+	int_bnd_mask[IX(i,j)] = 1;
+	int_bnd_mask[IX(i+1,j)] = 1;
+	int_bnd_mask[IX(i,j+1)] = 1;
+	int_bnd_mask[IX(i+1,j+1)] = 1;
+	int_bnd_mask[IX(i-1,j)] = 1;
+	int_bnd_mask[IX(i-1,j-1)] = 1;
+	int_bnd_mask[IX(i,j-1)] = 1;
+	int_bnd_mask[IX(i-1,j+1)] = 1;
+	int_bnd_mask[IX(i+1,j-1)] = 1;
+}
+
 static void get_from_UI ( float * d, float * u, float * v, int* int_bnd_mask)
 {
-	int i, j, size = (N+2)*(N+2);
+	int i, j, oi, oj, size = (N+2)*(N+2);
 
 	for ( i=0 ; i<size ; i++ ) {
 		u[i] = v[i] = d[i] = 0.0f;
@@ -273,21 +291,36 @@ static void get_from_UI ( float * d, float * u, float * v, int* int_bnd_mask)
 	i = (int)((       mx /(float)win_x)*N+1);
 	j = (int)(((win_y-my)/(float)win_y)*N+1);
 
+	oi = (int)((       omx /(float)win_x)*N+1);
+	oj = (int)(((win_y-omy)/(float)win_y)*N+1);
+
 	if ( i<1 || i>N || j<1 || j>N ) return;
 
-	if ( mouse_down[0] && !drb ) {
+	if ( mouse_down[0] && !drb && !int_bnd_mask[IX(i,j)]) {
 		u[IX(i,j)] = force * (mx-omx);
 		v[IX(i,j)] = force * (omy-my);
 	}
 
 	if ( mouse_down[1] ) {
-		int_bnd_mask[IX(i,j)] = 1;
-		int_bnd_mask[IX(i+1,j)] = 1;
-		int_bnd_mask[IX(i,j+1)] = 1;
-		int_bnd_mask[IX(i+1,j+1)] = 1;
+		set_boundary(int_bnd_mask, i, j);
+		
+		float dx = i-oi;
+		float dy = j-oj;
+		float dist = sqrt(dx*dx+dy*dy);
+		dx /= dist;
+		dy /= dist;
+
+		float ii = oi;
+		float jj = oj;
+
+		while(dx*ii < dx*i || dy*jj < dy*j) {
+			set_boundary(int_bnd_mask, int(ii), int(jj));
+			ii += dx;
+			jj += dy;
+		}
 	}
 
-	if ( mouse_down[2] ) {
+	if ( mouse_down[2] && !int_bnd_mask[IX(i,j)]) {
 		d[IX(i,j)] = source;
 	}
 
@@ -332,7 +365,7 @@ static void key_func ( unsigned char key, int x, int y )
 static void mouse_func ( int button, int state, int x, int y )
 {
 	omx = mx = x;
-	omx = my = y;
+	omy = my = y;
 
 	mouse_down[button] = state == GLUT_DOWN;
 }
@@ -377,44 +410,47 @@ static void idle_func ( void )
 	
 	get_from_UI ( dens_prev, u_prev, v_prev, internal_bd);
 	reset_bndAndvel();
-	if (mouse_down[0] && drb) {
-		mouseParticle->m_Position[0] = (2.0*mx / win_x) - 1;
-		mouseParticle->m_Position[1] = -(2.0*my / win_y) + 1;
+	
+	if (mouse_down[0] && drb && particleSystem->objectCount() > 0) {
+		mouseParticle->m_Position[0] = (       mx /(float)win_x);
+		mouseParticle->m_Position[1] = ((win_y-my)/(float)win_y);
 
-		Particle *closestParticle;
-		float closestDistanceSquared = std::numeric_limits<float>::max();
+		if(!mouse_down_prev) {
+			float closestDistanceSquared = std::numeric_limits<float>::max();
 
-		for (auto p : particleSystem->getParticles()) {
-			float dx = (mouseParticle->m_Position[0] - p->m_Position[0]);
-			float dy = (mouseParticle->m_Position[1] - p->m_Position[1]);
-			float distanceSquared = dx * dx + dy * dy;
-			if (distanceSquared < closestDistanceSquared) {
-				closestParticle = p;
-				closestDistanceSquared = distanceSquared;
-			}
-		}
-		// Also consider rb vertices
-		for (auto rb : particleSystem->getRigids()) {
-			for (auto p : rb->m_Vertices) {
-				float dx = (mouseParticle->m_Position[0] - (p->m_Position[0] + rb->m_Position[0]));
-				float dy = (mouseParticle->m_Position[1] - (p->m_Position[1] + rb->m_Position[1]));
+			for (auto p : particleSystem->getParticles()) {
+				float dx = (mouseParticle->m_Position[0] - p->m_Position[0]);
+				float dy = (mouseParticle->m_Position[1] - p->m_Position[1]);
 				float distanceSquared = dx * dx + dy * dy;
 				if (distanceSquared < closestDistanceSquared) {
 					closestParticle = p;
 					closestDistanceSquared = distanceSquared;
 				}
 			}
+			// Also consider rb vertices
+			for (auto rb : particleSystem->getRigids()) {
+				for (auto p : rb->m_Vertices) {
+					float dx = (mouseParticle->m_Position[0] - (p->m_Position[0] + rb->m_Position[0]));
+					float dy = (mouseParticle->m_Position[1] - (p->m_Position[1] + rb->m_Position[1]));
+					float distanceSquared = dx * dx + dy * dy;
+					if (distanceSquared < closestDistanceSquared) {
+						closestParticle = p;
+						closestDistanceSquared = distanceSquared;
+					}
+				}
+			}
+			delete mouseSpringForce;
+			mouseSpringForce = new SpringForce(mouseParticle, closestParticle, 0, mouse_kd, mouse_ks);
 		}
 
-		mouseSpringForce = new SpringForce(mouseParticle, closestParticle, 0, mouse_kd, mouse_ks);
-		
 		particleSystem->addForce(mouseSpringForce);
 		particleSystem->simulationStep();
 		particleSystem->removeLastForce();
-		delete mouseSpringForce;
-	}
-	else {
+		
+		mouse_down_prev = true;
+	} else {
 		particleSystem->simulationStep();
+		mouse_down_prev = false;
 	}
 	
 	particleSystem->projectRigidBodies(N, internal_bd, bnd_vel_u, bnd_vel_v);
@@ -438,7 +474,6 @@ static void display_func ( void )
 		particleSystem->drawForces();
 		particleSystem->drawParticles();
 		particleSystem->drawRigids();
-
 	post_display ();
 }
 
